@@ -169,14 +169,14 @@ func AdvanceTimeTo(
 		previousChainTime := changes.GetTimestamp()
 		duration := uint64(newChainTime.Sub(previousChainTime) / time.Second)
 
-		feeComplexity := changes.GetFeeComplexity()
-		feeComplexity = feeComplexity.AdvanceTime(
+		feeState := changes.GetFeeState()
+		feeState = feeState.AdvanceTime(
 			backend.Config.DynamicFeeConfig.MaxGasCapacity,
 			backend.Config.DynamicFeeConfig.MaxGasPerSecond,
 			backend.Config.DynamicFeeConfig.TargetGasPerSecond,
 			duration,
 		)
-		changes.SetFeeComplexity(feeComplexity)
+		changes.SetFeeState(feeState)
 	}
 
 	changes.SetTimestamp(newChainTime)
