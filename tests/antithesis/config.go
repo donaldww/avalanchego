@@ -5,13 +5,13 @@ package antithesis
 
 import (
 	"errors"
-	"fmt"
+	"flag"
+	"strings"
+	"time"
 
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
-
-	"github.com/ava-labs/avalanchego/config"
-	"github.com/ava-labs/avalanchego/wallet/subnet/primary"
+	"github.com/ava-labs/avalanchego/tests"
+	"github.com/ava-labs/avalanchego/tests/fixture/e2e"
+	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
 )
 
 const (
@@ -28,48 +28,63 @@ var (
 )
 
 type Config struct {
-	URIs     []string
-	ChainIDs []string
+	URIs          []string
+	ChainIDs      []string
+	ReuseNetwork  bool
+	ShutdownDelay time.Duration
 }
 
-func NewConfig(arguments []string) (*Config, error) {
-	v, err := parseFlags(arguments)
-	if err != nil {
-		return nil, err
+// TODO(marun) Revisit whether errors should be propagated instead of failing directly
+func NewConfig(defaultNetwork *tmpnet.Network, getSubnets func(nodes ...*tmpnet.Node) []*tmpnet.Subnet) *Config {
+	// tmpnet configuration
+	flagVars := e2e.RegisterFlags()
+
+	var (
+		uris     CSV
+		chainIDs CSV
+	)
+	// TODO(marun) Support the case of accepting a local api uri e.g. primary.LocalAPIURI
+	flag.Var(&uris, URIsKey, "URIs of nodes that the workload can communicate with")
+	flag.Var(&chainIDs, ChainIDsKey, "IDs of chains to target for testing")
+
+	flag.Parse()
+
+	if len(uris) == 0 {
+		// No URIs provided, default to tmpnet
+		defaultNetwork.Nodes = tmpnet.NewNodesOrPanic(flagVars.NodeCount())
+		defaultNetwork.Subnets = getSubnets(defaultNetwork.Nodes...)
+		tc := tests.NewTestContext()
+		testEnv := e2e.NewTestEnvironment(tc, flagVars, defaultNetwork)
+		uris = make(CSV, len(testEnv.URIs))
+		for i, nodeURI := range testEnv.URIs {
+			uris[i] = nodeURI.URI
+		}
+		network := testEnv.GetNetwork()
+		chainIDs = make(CSV, len(network.Subnets))
+		for i, subnet := range network.Subnets {
+			chainIDs[i] = subnet.Chains[0].ChainID.String()
+		}
 	}
 
-	c := &Config{
-		URIs:     v.GetStringSlice(URIsKey),
-		ChainIDs: v.GetStringSlice(ChainIDsKey),
+	return &Config{
+		URIs:          uris,
+		ChainIDs:      chainIDs,
+		ReuseNetwork:  flagVars.ReuseNetwork(),
+		ShutdownDelay: flagVars.NetworkShutdownDelay(),
 	}
-	return c, c.Verify()
 }
 
-func (c *Config) Verify() error {
-	if len(c.URIs) == 0 {
-		return errNoURIs
-	}
+// CSV is a custom type that implements the flag.Value interface
+type CSV []string
+
+// String returns the string representation of the CSV type
+func (c *CSV) String() string {
+	return strings.Join(*c, ",")
+
+}
+
+// Set splits the input string by commas and sets the CSV type
+func (c *CSV) Set(value string) error {
+	*c = strings.Split(value, ",")
 	return nil
-}
-
-func parseFlags(arguments []string) (*viper.Viper, error) {
-	if len(arguments) == 0 {
-		return nil, errNoArguments
-	}
-
-	fs := pflag.NewFlagSet(FlagsName, pflag.ContinueOnError)
-	fs.StringSlice(URIsKey, []string{primary.LocalAPIURI}, "URIs of nodes that the workload can communicate with")
-	fs.StringSlice(ChainIDsKey, []string{}, "IDs of chains to target for testing")
-	if err := fs.Parse(arguments[1:]); err != nil {
-		return nil, fmt.Errorf("failed parsing CLI flags: %w", err)
-	}
-
-	v := viper.New()
-	v.AutomaticEnv()
-	v.SetEnvKeyReplacer(config.DashesToUnderscores)
-	v.SetEnvPrefix(EnvPrefix)
-	if err := v.BindPFlags(fs); err != nil {
-		return nil, fmt.Errorf("failed binding pflags: %w", err)
-	}
-	return v, nil
 }

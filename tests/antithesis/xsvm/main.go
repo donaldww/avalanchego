@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"log"
 	"math/big"
-	"os"
 	"time"
 
 	"github.com/antithesishq/antithesis-sdk-go/assert"
@@ -17,6 +16,8 @@ import (
 	"github.com/ava-labs/avalanchego/genesis"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/tests/antithesis"
+	"github.com/ava-labs/avalanchego/tests/fixture/subnet"
+	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/units"
@@ -31,10 +32,41 @@ const (
 )
 
 func main() {
-	c, err := antithesis.NewConfig(os.Args)
-	if err != nil {
-		log.Fatalf("invalid config: %s", err)
+	network := &tmpnet.Network{
+		Owner: "antithesis-xsvm",
 	}
+	c := antithesis.NewConfig(
+		network,
+		func(nodes ...*tmpnet.Node) []*tmpnet.Subnet {
+			return []*tmpnet.Subnet{
+				subnet.NewXSVMOrPanic("xsvm", genesis.VMRQKey, nodes...),
+			}
+		},
+	)
+
+	// TODO(marun) Need to ensure this executes even if Fatalf is called
+	defer func() {
+		symlinkPath, err := tmpnet.GetReusableNetworkPathForOwner(network.Owner)
+		if err != nil {
+			log.Fatalf("failed to find symlink path: %v", err)
+		}
+		if c.ReuseNetwork {
+			log.Printf("Skipping shutdown for network %s (symlinked to %s) to enable reuse{{/}}\n", network.Dir, symlinkPath)
+			return
+		}
+		if c.ShutdownDelay > 0 {
+			log.Printf("Waiting %s before network shutdown to ensure final metrics scrape\n", c.ShutdownDelay)
+			time.Sleep(c.ShutdownDelay)
+		}
+
+		log.Printf("Shutting down network\n")
+		ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
+		defer cancel()
+		err = network.Stop(ctx)
+		if err != nil {
+			log.Fatalf("failed to stop network: %v", err)
+		}
+	}()
 
 	ctx := context.Background()
 	if err := antithesis.AwaitHealthyNodes(ctx, c.URIs); err != nil {
@@ -44,10 +76,13 @@ func main() {
 	if len(c.ChainIDs) != 1 {
 		log.Fatalf("expected 1 chainID, saw %d", len(c.ChainIDs))
 	}
+	log.Printf("CHAIN IDS: %v", c.ChainIDs)
 	chainID, err := ids.FromString(c.ChainIDs[0])
 	if err != nil {
 		log.Fatalf("failed to parse chainID: %s", err)
 	}
+
+	log.Printf("Using uris %v and chainID %s", c.URIs, chainID)
 
 	genesisWorkload := &workload{
 		id:      0,
