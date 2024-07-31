@@ -1514,10 +1514,10 @@ func TestStateFeeStateCommitAndLoad(t *testing.T) {
 	require.Equal(expectedFeeState, s.GetFeeState())
 }
 
-<<<<<<< HEAD
-func TestPutFeeState(t *testing.T) {
-	tests := []struct {
-		name          string
+// Verify that reading from the database returns the same value that was written
+// to it.
+func TestPutAndGetFeeState(t *testing.T) {
+	require := require.New(t)
 
 	db := memdb.New()
 	defaultFeeState, err := getFeeState(db)
@@ -1549,10 +1549,10 @@ func TestGetFeeStateErrors(t *testing.T) {
 			expectedErr: codec.ErrCantUnpackVersion,
 		},
 		{
->>>>>>> implement-acp-103-tx-builder
 			value: []byte{
 				// codec version
 				0x00, 0x00,
+				// truncated capacity
 				0x12, 0x34, 0x56, 0x78,
 			},
 			expectedErr: wrappers.ErrInsufficientLength,
