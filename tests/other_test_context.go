@@ -5,13 +5,13 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"time"
 
 	"github.com/onsi/ginkgo/v2/formatter"
-
 	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/avalanchego/wallet/subnet/primary/common"
@@ -20,6 +20,7 @@ import (
 // TODO(marun) Choose a better name
 type OtherTestContext struct {
 	defaultTimeout time.Duration
+	cleanupFuncs   []func()
 }
 
 func NewTestContext() *OtherTestContext {
@@ -29,23 +30,46 @@ func NewTestContext() *OtherTestContext {
 	}
 }
 
-func (tc *OtherTestContext) Errorf(format string, args ...interface{}) {
+func (*OtherTestContext) Errorf(format string, args ...interface{}) {
 	log.Printf("error: "+format, args...)
 }
 
 func (tc *OtherTestContext) FailNow() {
-	log.Fatal("FailNow called")
+	tc.Cleanup()
+	os.Exit(1)
 }
 
-func (tc *OtherTestContext) GetWriter() io.Writer {
+func (*OtherTestContext) GetWriter() io.Writer {
 	return os.Stdout
 }
 
-func (tc *OtherTestContext) DeferCleanup(args ...interface{}) {
-	// TODO(marun) Register functions and ensure they are called
+func (tc *OtherTestContext) Cleanup() {
+	// This function is intended to be deferred by the caller to ensure
+	// cleanup can be performed before exit.
+	if r := recover(); r != nil {
+		fmt.Println("assertion failure:", r)
+		// TODO(marun) Ensure a non-zero exit after cleanup
+	}
+
+	for _, cleanupFunc := range tc.cleanupFuncs {
+		func() {
+			// Ensure one failed cleanup doesn't preclude others from running
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Println("Recovered from in panic during cleanup:", r)
+					// TODO(marun) Ensure a non-zero exit after cleanup
+				}
+			}()
+			cleanupFunc()
+		}()
+	}
 }
 
-func (tc *OtherTestContext) By(text string, callback ...func()) {
+func (tc *OtherTestContext) DeferCleanup(cleanup func()) {
+	tc.cleanupFuncs = append(tc.cleanupFuncs, cleanup)
+}
+
+func (*OtherTestContext) By(_ string, _ ...func()) {
 	// TODO(marun)
 }
 
@@ -58,7 +82,7 @@ func (tc *OtherTestContext) By(text string, callback ...func()) {
 //
 // See https://github.com/onsi/ginkgo/blob/v2.0.0/formatter/formatter.go#L52-L73
 // for an exhaustive list of color options.
-func (tc *OtherTestContext) Outf(format string, args ...interface{}) {
+func (*OtherTestContext) Outf(format string, args ...interface{}) {
 	s := formatter.F(format, args...)
 	// Use GinkgoWriter to ensure that output from this function is
 	// printed sequentially within other test output produced with

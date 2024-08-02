@@ -8,13 +8,17 @@ import (
 	"crypto/rand"
 	"log"
 	"math/big"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/antithesishq/antithesis-sdk-go/assert"
 	"github.com/antithesishq/antithesis-sdk-go/lifecycle"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/avalanchego/genesis"
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/tests"
 	"github.com/ava-labs/avalanchego/tests/antithesis"
 	"github.com/ava-labs/avalanchego/tests/fixture/subnet"
 	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
@@ -32,11 +36,18 @@ const (
 )
 
 func main() {
-	network := &tmpnet.Network{
-		Owner: "antithesis-xsvm",
-	}
-	c := antithesis.NewConfig(
-		network,
+	tc := tests.NewTestContext()
+	defer tc.Cleanup()
+	require := require.New(tc)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	c := antithesis.NewConfigWithSubnets(
+		tc,
+		&tmpnet.Network{
+			Owner: "antithesis-xsvm",
+		},
 		func(nodes ...*tmpnet.Node) []*tmpnet.Subnet {
 			return []*tmpnet.Subnet{
 				subnet.NewXSVMOrPanic("xsvm", genesis.VMRQKey, nodes...),
@@ -44,43 +55,10 @@ func main() {
 		},
 	)
 
-	// TODO(marun) Need to ensure this executes even if Fatalf is called
-	defer func() {
-		symlinkPath, err := tmpnet.GetReusableNetworkPathForOwner(network.Owner)
-		if err != nil {
-			log.Fatalf("failed to find symlink path: %v", err)
-		}
-		if c.ReuseNetwork {
-			log.Printf("Skipping shutdown for network %s (symlinked to %s) to enable reuse{{/}}\n", network.Dir, symlinkPath)
-			return
-		}
-		if c.ShutdownDelay > 0 {
-			log.Printf("Waiting %s before network shutdown to ensure final metrics scrape\n", c.ShutdownDelay)
-			time.Sleep(c.ShutdownDelay)
-		}
-
-		log.Printf("Shutting down network\n")
-		ctx, cancel := context.WithTimeout(context.Background(), tmpnet.DefaultNetworkTimeout)
-		defer cancel()
-		err = network.Stop(ctx)
-		if err != nil {
-			log.Fatalf("failed to stop network: %v", err)
-		}
-	}()
-
-	ctx := context.Background()
-	if err := antithesis.AwaitHealthyNodes(ctx, c.URIs); err != nil {
-		log.Fatalf("failed to await healthy nodes: %s", err)
-	}
-
-	if len(c.ChainIDs) != 1 {
-		log.Fatalf("expected 1 chainID, saw %d", len(c.ChainIDs))
-	}
+	require.Len(c.ChainIDs, 1)
 	log.Printf("CHAIN IDS: %v", c.ChainIDs)
 	chainID, err := ids.FromString(c.ChainIDs[0])
-	if err != nil {
-		log.Fatalf("failed to parse chainID: %s", err)
-	}
+	require.NoError(err, "failed to parse chainID")
 
 	log.Printf("Using uris %v and chainID %s", c.URIs, chainID)
 
@@ -98,9 +76,7 @@ func main() {
 	initialAmount := 100 * units.KiloAvax
 	for i := 1; i < NumKeys; i++ {
 		key, err := secp256k1.NewPrivateKey()
-		if err != nil {
-			log.Fatalf("failed to generate key: %s", err)
-		}
+		require.NoError(err, "failed to generate key: %s")
 
 		var (
 			addr          = key.Address()
@@ -117,9 +93,7 @@ func main() {
 				PrivateKey: genesisWorkload.key,
 			},
 		)
-		if err != nil {
-			log.Fatalf("failed to issue initial funding transfer: %s", err)
-		}
+		require.NoError(err, "failed to issue initial funding transfer")
 		log.Printf("issued initial funding transfer %s in %s", transferTxStatus.TxID, time.Since(baseStartTime))
 
 		genesisWorkload.confirmTransferTx(ctx, transferTxStatus)
@@ -158,13 +132,15 @@ func (w *workload) run(ctx context.Context) {
 		<-timer.C
 	}
 
+	tc := tests.NewTestContext()
+	defer tc.Cleanup()
+	require := require.New(tc)
+
 	uri := w.uris[w.id%len(w.uris)]
 
 	client := api.NewClient(uri, w.chainID.String())
 	balance, err := client.Balance(ctx, w.key.Address(), w.chainID)
-	if err != nil {
-		log.Fatalf("failed to fetch balance: %s", err)
-	}
+	require.NoError(err, "failed to fetch balance")
 	log.Printf("worker %d starting with a balance of %d", w.id, balance)
 	assert.Reachable("worker starting", map[string]any{
 		"worker":  w.id,
@@ -193,9 +169,7 @@ func (w *workload) run(ctx context.Context) {
 		}
 
 		val, err := rand.Int(rand.Reader, big.NewInt(int64(time.Second)))
-		if err != nil {
-			log.Fatalf("failed to read randomness: %s", err)
-		}
+		require.NoError(err, "failed to read randomness")
 
 		timer.Reset(time.Duration(val.Int64()))
 		select {

@@ -116,6 +116,7 @@ func NewTestEnvironment(tc tests.TestContext, flagVars *FlagVars, desiredNetwork
 	// Start a new network
 	if network == nil {
 		network = desiredNetwork
+		// TODO(marun) Check that the expected VM filename is present in the plugin directory
 		StartNetwork(
 			tc,
 			network,

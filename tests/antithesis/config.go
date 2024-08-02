@@ -4,15 +4,17 @@
 package antithesis
 
 import (
-	"errors"
 	"flag"
 	"strings"
-	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/avalanchego/tests"
 	"github.com/ava-labs/avalanchego/tests/fixture/e2e"
 	"github.com/ava-labs/avalanchego/tests/fixture/tmpnet"
 )
+
+// TODO(marun) Support accepting uris and chain ids as env vars
 
 const (
 	URIsKey     = "uris"
@@ -22,56 +24,71 @@ const (
 	EnvPrefix = "avawl"
 )
 
-var (
-	errNoURIs      = errors.New("at least one URI must be provided")
-	errNoArguments = errors.New("no arguments")
-)
-
 type Config struct {
-	URIs          []string
-	ChainIDs      []string
-	ReuseNetwork  bool
-	ShutdownDelay time.Duration
+	URIs     []string
+	ChainIDs []string
 }
 
-// TODO(marun) Revisit whether errors should be propagated instead of failing directly
-func NewConfig(defaultNetwork *tmpnet.Network, getSubnets func(nodes ...*tmpnet.Node) []*tmpnet.Subnet) *Config {
+// Cleans up resources created by the configuration
+type CleanupFunc func()
+
+type SubnetsForNodesFunc func(nodes ...*tmpnet.Node) []*tmpnet.Subnet
+
+func NewConfig(tc tests.TestContext, defaultNetwork *tmpnet.Network) *Config {
+	return NewConfigWithSubnets(tc, defaultNetwork, nil)
+}
+
+func NewConfigWithSubnets(tc tests.TestContext, defaultNetwork *tmpnet.Network, getSubnets SubnetsForNodesFunc) *Config {
 	// tmpnet configuration
 	flagVars := e2e.RegisterFlags()
 
 	var (
-		uris     CSV
+		uris CSV
+		// Accept a list of chain IDs, assume they each belong to a separate subnet
+		// TODO(marun) Revisit how chain IDs are provided when 1:n subnet:chain configuration is required.
 		chainIDs CSV
 	)
-	// TODO(marun) Support the case of accepting a local api uri e.g. primary.LocalAPIURI
 	flag.Var(&uris, URIsKey, "URIs of nodes that the workload can communicate with")
 	flag.Var(&chainIDs, ChainIDsKey, "IDs of chains to target for testing")
 
 	flag.Parse()
 
-	if len(uris) == 0 {
-		// No URIs provided, default to tmpnet
-		defaultNetwork.Nodes = tmpnet.NewNodesOrPanic(flagVars.NodeCount())
-		defaultNetwork.Subnets = getSubnets(defaultNetwork.Nodes...)
-		tc := tests.NewTestContext()
-		testEnv := e2e.NewTestEnvironment(tc, flagVars, defaultNetwork)
-		uris = make(CSV, len(testEnv.URIs))
-		for i, nodeURI := range testEnv.URIs {
-			uris[i] = nodeURI.URI
-		}
-		network := testEnv.GetNetwork()
-		chainIDs = make(CSV, len(network.Subnets))
-		for i, subnet := range network.Subnets {
-			chainIDs[i] = subnet.Chains[0].ChainID.String()
+	// Use the network configuration provided
+	if len(uris) != 0 {
+		require.NoError(tc, awaitHealthyNodes(tc.DefaultContext(), uris), "failed to see healthy nodes")
+		return &Config{
+			URIs:     uris,
+			ChainIDs: chainIDs,
 		}
 	}
 
-	return &Config{
-		URIs:          uris,
-		ChainIDs:      chainIDs,
-		ReuseNetwork:  flagVars.ReuseNetwork(),
-		ShutdownDelay: flagVars.NetworkShutdownDelay(),
+	// Create a new network
+	return configForNewNetwork(tc, defaultNetwork, getSubnets, flagVars)
+}
+
+// configForNewNetwork creates a new network and returns the resulting config and cleanup function.
+func configForNewNetwork(tc tests.TestContext, defaultNetwork *tmpnet.Network, getSubnets SubnetsForNodesFunc, flagVars *e2e.FlagVars) *Config {
+	if defaultNetwork.Nodes == nil {
+		defaultNetwork.Nodes = tmpnet.NewNodesOrPanic(flagVars.NodeCount())
 	}
+	if defaultNetwork.Subnets == nil && getSubnets != nil {
+		defaultNetwork.Subnets = getSubnets(defaultNetwork.Nodes...)
+	}
+
+	testEnv := e2e.NewTestEnvironment(tc, flagVars, defaultNetwork)
+
+	c := &Config{}
+	c.URIs = make(CSV, len(testEnv.URIs))
+	for i, nodeURI := range testEnv.URIs {
+		c.URIs[i] = nodeURI.URI
+	}
+	network := testEnv.GetNetwork()
+	c.ChainIDs = make(CSV, len(network.Subnets))
+	for i, subnet := range network.Subnets {
+		c.ChainIDs[i] = subnet.Chains[0].ChainID.String()
+	}
+
+	return c
 }
 
 // CSV is a custom type that implements the flag.Value interface
@@ -80,7 +97,6 @@ type CSV []string
 // String returns the string representation of the CSV type
 func (c *CSV) String() string {
 	return strings.Join(*c, ",")
-
 }
 
 // Set splits the input string by commas and sets the CSV type
