@@ -270,7 +270,7 @@ func buildBlock(
 		blockTxs []*txs.Tx
 		err      error
 	)
-	if builder.txExecutorBackend.Config.UpgradeConfig.IsEActivated(timestamp) {
+	if builder.txExecutorBackend.Config.UpgradeConfig.IsEtnaActivated(timestamp) {
 		blockTxs, err = packEtnaBlockTxs(
 			parentID,
 			parentState,
