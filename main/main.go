@@ -26,7 +26,7 @@ func main() {
 	}
 
 	if err != nil {
-		fmt.Printf("couldn't configure flags: %s\n", err)
+		fmt.Printf("could not configure flags: %s\n", err)
 		os.Exit(1)
 	}
 
